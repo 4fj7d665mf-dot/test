@@ -1,0 +1,71 @@
+name: Build VideoFilter from ZIP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project ZIP
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ZIP="$(find . -maxdepth 1 -type f -name '*XelahotVideoFilter*.zip' | head -n 1)"
+          test -n "$ZIP"
+          rm -rf buildsrc
+          mkdir -p buildsrc
+          ditto -x -k "$ZIP" buildsrc
+          test -f buildsrc/XelahotVideoFilter/Makefile
+
+      - name: Setup Theos
+        uses: waruhachi/theos-action@v2.6.3
+        with:
+          theos-src: theos/theos
+          theos-branch: master
+          sdks-src: theos/sdks
+          sdks-branch: master
+          remotelog: 'false'
+          libgcuniversal: 'false'
+          altlist: 'false'
+          comet: 'false'
+          orion: 'false'
+
+      - name: Generate config and embedded Metal source
+        shell: bash
+        working-directory: buildsrc/XelahotVideoFilter
+        run: |
+          set -euxo pipefail
+          python3 scripts/generate_filter.py TargetApps.plist VideoFilter.plist TargetApps.generated.h
+          python3 scripts/embed_shaders.py Shaders.metal ShadersEmbedded.inc
+
+      - name: Build dylib and package
+        shell: bash
+        working-directory: buildsrc/XelahotVideoFilter
+        run: |
+          set -euxo pipefail
+          make clean
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts
+          DYLIB="$(find buildsrc/XelahotVideoFilter/.theos -type f -name 'VideoFilter.dylib' | head -n 1)"
+          test -n "$DYLIB"
+          cp "$DYLIB" artifacts/VideoFilter.dylib
+          find buildsrc/XelahotVideoFilter/packages -maxdepth 1 -type f -name '*.deb' -exec cp {} artifacts/ \; || true
+          file artifacts/VideoFilter.dylib
+          shasum -a 256 artifacts/VideoFilter.dylib > artifacts/VideoFilter.dylib.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoFilter-build
+          path: artifacts/*
+          if-no-files-found: error
